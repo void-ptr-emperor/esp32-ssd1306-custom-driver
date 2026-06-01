@@ -278,48 +278,22 @@ void for_print_string_in_display(const char *for_str, uint8_t for_x, uint8_t for
 void app_main(void) {
     for_screen_init(21, 22, FOR_I2C_ADDR);
 
-    for_clear_screen_buffer();
+    for_clear_screen_buffer(); 
+
+    for (int for_x = 0; for_x < 128; for_x++) {
+        for_draw_pixel(for_x, 0);                 
+        for_draw_pixel(for_x, 63);                
+    } 
+    for (int for_y = 0; for_y < 64; for_y++) {
+        for_draw_pixel(0, for_y);                 
+        for_draw_pixel(127, for_y);               
+    }
+
     for_print_string_in_display("Hello, world!", 25, 28);
+
     for_update_screen();
 
-    vTaskDelay(3000 / portTICK_PERIOD_MS);
-
-    int for_uptime = 0;
-    bool for_is_scanning = false;
-    char for_text[32];
-
     while(1) {
-        for_clear_screen_buffer();
-
-        for (int for_x = 0; for_x < 128; for_x++) {
-            for_draw_pixel(for_x, 0);
-            for_draw_pixel(for_x, 63);
-        }
-        for (int for_y = 0; for_y < 64; for_y++) {
-            for_draw_pixel(0, for_y);
-            for_draw_pixel(127, for_y);
-        }
-
-        sprintf(for_text, "UPTIME: %d SEC", for_uptime);
-        for_print_string_in_display(for_text, 5, 5);
-
-        if (for_uptime % 5 == 0) {
-            for_is_scanning = !for_is_scanning;
-        }
-
-        if (for_is_scanning) {
-            for_print_string_in_display("MODE--> SCANNING...", 5, 25);
-        } else {
-            for_print_string_in_display("MODE--> ACTIVE", 5, 25);
-        }
-
-        int for_temp = 40 + (for_uptime % 5);
-        sprintf(for_text, "CORE TEMP: %d C", for_temp);
-        for_print_string_in_display(for_text, 5, 45);
-
-        for_update_screen();
-
         vTaskDelay(1000 / portTICK_PERIOD_MS);
-        for_uptime++;
     }
 }
