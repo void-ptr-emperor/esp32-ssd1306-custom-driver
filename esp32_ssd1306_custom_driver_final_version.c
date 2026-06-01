@@ -1,0 +1,325 @@
+#include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+// Macros & Configuration
+#define FOR_MSB_MASK                     0x80
+#define FOR_BITS_PER_BYTE                8
+#define FOR_I2C_ADDR                     0x78
+
+// SSD1306 Control Bytes
+#define FOR_CMD_MODE                     0x00
+#define FOR_DATA_MODE                    0x40
+
+// SSD1306 Commands
+#define FOR_SSD1306_DISPLAY_OFF          0xAE
+#define FOR_SSD1306_DISPLAY_ON           0xAF
+#define FOR_SSD1306_MEMORY_MODE          0x20
+#define FOR_SSD1306_ADDR_MODE_HORIZONTAL 0x00
+#define FOR_SSD1306_COM_SCAN_DEC         0xC8
+#define FOR_SSD1306_SEG_REMAP_OP         0xA1
+#define FOR_SSD1306_CHARGE_PUMP          0x8D
+#define FOR_SSD1306_CHARGE_PUMP_ON       0x14
+#define FOR_SSD1306_DISPLAY_ALL_ON_RES   0xA4
+#define FOR_SSD1306_NORMAL_DISPLAY       0xA6
+#define FOR_SSD1306_COLUMN_ADDR          0x21
+#define FOR_SSD1306_PAGE_ADDR            0x22
+
+// Display Boundaries (128x64)
+#define FOR_X_START                      0x00
+#define FOR_X_END                        0x7F
+#define FOR_Y_START                      0x00
+#define FOR_Y_END                        0x07
+
+// Font Dictionary (ASCII 5x7)
+static const uint8_t for_ascii_5x7[][5] = {
+    {0x00, 0x00, 0x00, 0x00, 0x00}, // Space (ASCII 32)
+    {0x00, 0x00, 0x2f, 0x00, 0x00}, // !
+    {0x00, 0x07, 0x00, 0x07, 0x00}, // "
+    {0x14, 0x7f, 0x14, 0x7f, 0x14}, // #
+    {0x24, 0x2a, 0x7f, 0x2a, 0x12}, // $
+    {0x23, 0x13, 0x08, 0x64, 0x62}, // %
+    {0x36, 0x49, 0x55, 0x22, 0x50}, // &
+    {0x00, 0x05, 0x03, 0x00, 0x00}, // '
+    {0x00, 0x1c, 0x22, 0x41, 0x00}, // (
+        {0x00, 0x41, 0x22, 0x1c, 0x00}, // )
+        {0x14, 0x08, 0x3e, 0x08, 0x14}, // *
+        {0x08, 0x08, 0x3e, 0x08, 0x08}, // +
+        {0x00, 0x00, 0x50, 0x30, 0x00}, // ,
+        {0x08, 0x08, 0x08, 0x08, 0x08}, // -
+        {0x00, 0x60, 0x60, 0x00, 0x00}, // .
+        {0x20, 0x10, 0x08, 0x04, 0x02}, // /
+        {0x3e, 0x51, 0x4f, 0x45, 0x3e}, // 0 (ASCII 48)
+        {0x00, 0x42, 0x7f, 0x40, 0x00}, // 1
+        {0x42, 0x61, 0x51, 0x49, 0x46}, // 2
+        {0x21, 0x41, 0x45, 0x4b, 0x31}, // 3
+        {0x18, 0x14, 0x12, 0x7f, 0x10}, // 4
+        {0x27, 0x45, 0x45, 0x45, 0x39}, // 5
+        {0x3c, 0x4a, 0x49, 0x49, 0x30}, // 6
+        {0x01, 0x71, 0x09, 0x05, 0x03}, // 7
+        {0x36, 0x49, 0x49, 0x49, 0x36}, // 8
+        {0x06, 0x49, 0x49, 0x29, 0x1e}, // 9
+        {0x00, 0x36, 0x36, 0x00, 0x00}, // :
+        {0x00, 0x56, 0x36, 0x00, 0x00}, // ;
+        {0x08, 0x14, 0x22, 0x41, 0x00}, // <
+        {0x24, 0x24, 0x24, 0x24, 0x24}, // =
+        {0x00, 0x41, 0x22, 0x14, 0x08}, // >
+        {0x02, 0x01, 0x51, 0x09, 0x06}, // ?
+        {0x32, 0x49, 0x79, 0x41, 0x3e}, // @
+        {0x7e, 0x11, 0x11, 0x11, 0x7e}, // A (ASCII 65)
+        {0x7f, 0x49, 0x49, 0x49, 0x36}, // B
+        {0x3e, 0x41, 0x41, 0x41, 0x22}, // C
+        {0x7f, 0x41, 0x41, 0x22, 0x1c}, // D
+        {0x7f, 0x49, 0x49, 0x49, 0x41}, // E
+        {0x7f, 0x09, 0x09, 0x09, 0x01}, // F
+        {0x3e, 0x41, 0x49, 0x49, 0x7a}, // G
+        {0x7f, 0x08, 0x08, 0x08, 0x7f}, // H
+        {0x00, 0x41, 0x7f, 0x41, 0x00}, // I
+        {0x20, 0x40, 0x41, 0x3f, 0x01}, // J
+        {0x7f, 0x08, 0x14, 0x22, 0x41}, // K
+        {0x7f, 0x40, 0x40, 0x40, 0x40}, // L
+        {0x7f, 0x02, 0x0c, 0x02, 0x7f}, // M
+        {0x7f, 0x04, 0x08, 0x10, 0x7f}, // N
+        {0x3e, 0x41, 0x41, 0x41, 0x3e}, // O
+        {0x7f, 0x09, 0x09, 0x09, 0x06}, // P
+        {0x3e, 0x41, 0x51, 0x21, 0x5e}, // Q
+        {0x7f, 0x09, 0x19, 0x29, 0x46}, // R
+        {0x46, 0x49, 0x49, 0x49, 0x31}, // S
+        {0x01, 0x01, 0x7f, 0x01, 0x01}, // T
+        {0x3f, 0x40, 0x40, 0x40, 0x3f}, // U
+        {0x1f, 0x20, 0x40, 0x20, 0x1f}, // V
+        {0x3f, 0x40, 0x38, 0x40, 0x3f}, // W
+        {0x63, 0x14, 0x08, 0x14, 0x63}, // X
+        {0x07, 0x08, 0x70, 0x08, 0x07}, // Y
+        {0x61, 0x51, 0x49, 0x45, 0x43}, // Z
+        {0x00, 0x7f, 0x41, 0x41, 0x00}, // [
+        {0x02, 0x04, 0x08, 0x10, 0x20}, // '\'
+        {0x00, 0x41, 0x41, 0x7f, 0x00}, // ]
+        {0x04, 0x02, 0x01, 0x02, 0x04}, // ^
+        {0x40, 0x40, 0x40, 0x40, 0x40}, // _
+        {0x00, 0x01, 0x02, 0x04, 0x00}, // `
+        {0x20, 0x54, 0x54, 0x54, 0x78}, // a (ASCII 97)
+        {0x7f, 0x48, 0x44, 0x44, 0x38}, // b
+        {0x38, 0x44, 0x44, 0x44, 0x20}, // c
+        {0x38, 0x44, 0x44, 0x48, 0x7f}, // d
+        {0x38, 0x54, 0x54, 0x54, 0x18}, // e
+        {0x08, 0x7e, 0x09, 0x01, 0x02}, // f
+        {0x0c, 0x52, 0x52, 0x52, 0x3e}, // g
+        {0x7f, 0x08, 0x04, 0x04, 0x78}, // h
+        {0x00, 0x44, 0x7d, 0x40, 0x00}, // i
+        {0x20, 0x40, 0x44, 0x3d, 0x00}, // j
+        {0x7f, 0x10, 0x28, 0x44, 0x00}, // k
+        {0x00, 0x41, 0x7f, 0x40, 0x00}, // l
+        {0x7c, 0x04, 0x18, 0x04, 0x78}, // m
+        {0x7c, 0x08, 0x04, 0x04, 0x78}, // n
+        {0x38, 0x44, 0x44, 0x44, 0x38}, // o
+        {0x7c, 0x14, 0x14, 0x14, 0x08}, // p
+        {0x08, 0x14, 0x14, 0x18, 0x7c}, // q
+        {0x7c, 0x08, 0x04, 0x04, 0x08}, // r
+        {0x48, 0x54, 0x54, 0x54, 0x20}, // s
+        {0x04, 0x3f, 0x44, 0x40, 0x20}, // t
+        {0x3c, 0x40, 0x40, 0x20, 0x7c}, // u
+        {0x1c, 0x20, 0x40, 0x20, 0x1c}, // v
+        {0x3c, 0x40, 0x30, 0x40, 0x3c}, // w
+        {0x44, 0x28, 0x10, 0x28, 0x44}, // x
+        {0x0c, 0x50, 0x50, 0x50, 0x3c}, // y
+        {0x44, 0x64, 0x54, 0x4c, 0x44}, // z
+        {0x00, 0x08, 0x36, 0x41, 0x00}, // {
+        {0x00, 0x00, 0x7f, 0x00, 0x00}, // |
+        {0x00, 0x41, 0x36, 0x08, 0x00}, // }
+        {0x10, 0x08, 0x18, 0x10, 0x08}  // ~ (ASCII 126)
+};
+
+// Global Variables
+static int     for_internal_sda;
+static int     for_internal_scl;
+static uint8_t for_internal_addr;
+static uint8_t for_screen_buffer[1024];
+
+// Init Sequence
+static const uint8_t for_init_commands[] = {
+    FOR_SSD1306_DISPLAY_OFF,
+    FOR_SSD1306_MEMORY_MODE,
+    FOR_SSD1306_ADDR_MODE_HORIZONTAL,
+    FOR_SSD1306_COM_SCAN_DEC,
+    FOR_SSD1306_SEG_REMAP_OP,
+    FOR_SSD1306_CHARGE_PUMP,
+    FOR_SSD1306_CHARGE_PUMP_ON,
+    FOR_SSD1306_DISPLAY_ALL_ON_RES,
+    FOR_SSD1306_NORMAL_DISPLAY,
+    FOR_SSD1306_COLUMN_ADDR,
+    FOR_X_START,
+    FOR_X_END,
+    FOR_SSD1306_PAGE_ADDR,
+    FOR_Y_START,
+    FOR_Y_END,
+    FOR_SSD1306_DISPLAY_ON
+};
+
+// Low-Level I2C Operations
+static void for_i2c_start(void) {
+    gpio_set_level(for_internal_sda, 1);
+    gpio_set_level(for_internal_scl, 1);
+    gpio_set_level(for_internal_sda, 0);
+}
+
+static void for_i2c_stop(void) {
+    gpio_set_level(for_internal_scl, 0);
+    gpio_set_level(for_internal_sda, 0);
+    gpio_set_level(for_internal_scl, 1);
+    gpio_set_level(for_internal_sda, 1);
+}
+
+static bool for_i2c_check_ack(void) {
+    gpio_set_level(for_internal_scl, 0);
+    gpio_set_level(for_internal_sda, 1);
+    gpio_set_level(for_internal_scl, 1);
+
+    int for_ack = gpio_get_level(for_internal_sda);
+    gpio_set_level(for_internal_scl, 0);
+
+    return (for_ack == 0);
+}
+
+static void for_write_byte_in_screen(uint8_t for_data) {
+    for(int for_i = 0; for_i < FOR_BITS_PER_BYTE; for_i++) {
+        uint8_t for_bit = (for_data & FOR_MSB_MASK) ? 1 : 0;
+
+        gpio_set_level(for_internal_scl, 0);
+        gpio_set_level(for_internal_sda, for_bit);
+        gpio_set_level(for_internal_scl, 1);
+
+        for_data = for_data << 1;
+    }
+    for_i2c_check_ack();
+}
+
+// Display Driver API
+void for_screen_init(int for_sda, int for_scl, uint8_t for_addr) {
+    for_internal_sda = for_sda;
+    for_internal_scl = for_scl;
+    for_internal_addr = for_addr;
+
+    gpio_reset_pin(for_internal_sda);
+    gpio_set_direction(for_internal_sda, GPIO_MODE_INPUT_OUTPUT_OD);
+
+    gpio_reset_pin(for_internal_scl);
+    gpio_set_direction(for_internal_scl, GPIO_MODE_INPUT_OUTPUT_OD);
+
+    for_i2c_start();
+    for_write_byte_in_screen(for_internal_addr);
+    for_write_byte_in_screen(FOR_CMD_MODE);
+
+    int for_cmd_count = sizeof(for_init_commands) / sizeof(for_init_commands[0]);
+    for(int for_i = 0; for_i < for_cmd_count; for_i++) {
+        for_write_byte_in_screen(for_init_commands[for_i]);
+    }
+
+    for_i2c_stop();
+}
+
+void for_clear_screen_buffer(void) {
+    for (int for_i = 0; for_i < 1024; for_i++) {
+        for_screen_buffer[for_i] = 0;
+    }
+}
+
+void for_draw_pixel(uint8_t for_x, uint8_t for_y) {
+    if (for_x > 127 || for_y > 63) return;
+
+    uint8_t for_page = for_y / 8;
+    uint16_t for_index = (for_page * 128) + for_x;
+    uint8_t for_bit_pos = for_y % 8;
+
+    for_screen_buffer[for_index] |= (1 << for_bit_pos);
+}
+
+void for_update_screen(void) {
+    for_i2c_start();
+    for_write_byte_in_screen(for_internal_addr);
+    for_write_byte_in_screen(FOR_DATA_MODE);
+
+    for(int for_i = 0; for_i < 1024; for_i++) {
+        for_write_byte_in_screen(for_screen_buffer[for_i]);
+    }
+
+    for_i2c_stop();
+}
+
+void for_print_using_ascii(char for_symbol, uint8_t for_x, uint8_t for_y) {
+    if (for_symbol < 32 || for_symbol > 126) return;
+
+    int for_char_index = for_symbol - 32;
+
+    for (int for_col = 0; for_col < 5; for_col++) {
+        uint8_t for_byte = for_ascii_5x7[for_char_index][for_col];
+
+        for (int for_row = 0; for_row < 8; for_row++) {
+            if (for_byte & (1 << for_row)) {
+                for_draw_pixel(for_x + for_col, for_y + for_row);
+            }
+        }
+    }
+}
+
+void for_print_string_in_display(const char *for_str, uint8_t for_x, uint8_t for_y) {
+    int for_idx = 0;
+    while(for_str[for_idx] != '\0') {
+        for_print_using_ascii(for_str[for_idx], for_x, for_y);
+        for_x += 6;
+        for_idx++;
+    }
+}
+
+// Main Application
+void app_main(void) {
+    for_screen_init(21, 22, FOR_I2C_ADDR);
+
+    for_clear_screen_buffer();
+    for_print_string_in_display("Hello, world!", 25, 28);
+    for_update_screen();
+
+    vTaskDelay(3000 / portTICK_PERIOD_MS);
+
+    int for_uptime = 0;
+    bool for_is_scanning = false;
+    char for_text[32];
+
+    while(1) {
+        for_clear_screen_buffer();
+
+        for (int for_x = 0; for_x < 128; for_x++) {
+            for_draw_pixel(for_x, 0);
+            for_draw_pixel(for_x, 63);
+        }
+        for (int for_y = 0; for_y < 64; for_y++) {
+            for_draw_pixel(0, for_y);
+            for_draw_pixel(127, for_y);
+        }
+
+        sprintf(for_text, "UPTIME: %d SEC", for_uptime);
+        for_print_string_in_display(for_text, 5, 5);
+
+        if (for_uptime % 5 == 0) {
+            for_is_scanning = !for_is_scanning;
+        }
+
+        if (for_is_scanning) {
+            for_print_string_in_display("MODE--> SCANNING...", 5, 25);
+        } else {
+            for_print_string_in_display("MODE--> ACTIVE", 5, 25);
+        }
+
+        int for_temp = 40 + (for_uptime % 5);
+        sprintf(for_text, "CORE TEMP: %d C", for_temp);
+        for_print_string_in_display(for_text, 5, 45);
+
+        for_update_screen();
+
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        for_uptime++;
+    }
+}
